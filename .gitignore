@@ -1,0 +1,13 @@
+/target
+/kernel/target
+/loader/target
+**/*.rs.bk
+/emulation/peripherals.csproj
+
+*.map
+
+# Emacs
+*~
+
+# local utility shellscripts
+update-precursors.sh
