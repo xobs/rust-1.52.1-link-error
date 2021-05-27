@@ -210,7 +210,6 @@ pub extern "C" fn trap_handler(
                 PREVIOUS_PAIR = Some((pid, tid));
             }
         }
-        crate::irq::handle(irqs_pending).expect("Couldn't handle IRQ");
         ArchProcess::with_current_mut(|process| {
             crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
         })

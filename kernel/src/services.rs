@@ -196,21 +196,6 @@ impl Process {
     }
 
     pub fn terminate(&mut self) -> Result<(), xous_kernel::Error> {
-        if self.free() {
-            return Err(xous_kernel::Error::ProcessNotFound);
-        }
-
-        // Free all associated memory pages
-        unsafe {
-            crate::mem::MemoryManager::with_mut(|mm| mm.release_all_memory_for_process(self.pid))
-        };
-
-        // Free all claimed IRQs
-        crate::irq::release_interrupts_for_pid(self.pid);
-
-        // Remove this PID from the process table
-        crate::arch::process::Process::destroy(self.pid)?;
-        self.state = ProcessState::Free;
         Ok(())
     }
 }
