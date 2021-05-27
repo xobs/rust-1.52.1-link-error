@@ -6,6 +6,7 @@ name = "kernel"
 version = "0.8.2"
 
 [dependencies]
+# gdbstub = {path = "../bare-gdbstub", optional = true, default_features = false}
 gdbstub = {path = "../gdbstub", optional = true, default_features = false}
 
 [features]
