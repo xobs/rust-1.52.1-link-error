@@ -62,25 +62,9 @@ pub extern "C" fn init(arg_offset: *const u32, init_offset: *const u32, rpt_offs
     // handler then directly map it.
     #[cfg(any(feature = "debug-print", feature = "print-panics"))]
     {
-        use utralib::generated::*;
-        xous_kernel::claim_interrupt(utra::uart::UART_IRQ, debug::irq, 0 as *mut usize)
+        xous_kernel::claim_interrupt(4, debug::irq, 0 as *mut usize)
             .expect("Couldn't claim debug interrupt");
-        // Map the serial port so println!() works as expected.
-        mem::MemoryManager::with_mut(|memory_manager| {
-            memory_manager
-                .map_range(
-                    utra::uart::HW_UART_BASE as *mut u8,
-                    ((debug::SUPERVISOR_UART_ADDR as u32) & !4095) as *mut u8,
-                    4096,
-                    PID::new(1).unwrap(),
-                    MemoryFlags::R | MemoryFlags::W,
-                    MemoryType::Default,
-                )
-                .expect("unable to map serial port")
-        });
-        debug::Uart {}.init();
         println!("KMAIN (clean boot): Supervisor mode started...");
-        println!("Claiming IRQ {} via syscall...", utra::uart::UART_IRQ);
         print!("}} ");
 
         // Print the processed kernel arguments
