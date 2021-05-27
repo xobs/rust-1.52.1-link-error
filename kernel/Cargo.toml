@@ -7,9 +7,8 @@ version = "0.8.2"
 
 [dependencies]
 gdbstub = {path = "../gdbstub", optional = true, default_features = false}
-gdbstub_arch = {path = "../gdbstub/gdbstub_arch", optional = true}
 
 [features]
-gdbserver = ["gdbstub", "gdbstub_arch"]
+gdbserver = ["gdbstub"]
 print-panics = []
 default = ["print-panics", "gdbserver"]

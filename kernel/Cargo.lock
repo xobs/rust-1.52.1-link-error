@@ -30,19 +30,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "gdbstub_arch"
-version = "0.1.0"
-dependencies = [
- "gdbstub",
- "num-traits",
-]
-
-[[package]]
 name = "kernel"
 version = "0.8.2"
 dependencies = [
  "gdbstub",
- "gdbstub_arch",
 ]
 
 [[package]]

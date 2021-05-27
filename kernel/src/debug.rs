@@ -5,6 +5,45 @@ pub struct Uart {}
 
 #[cfg(feature = "gdbserver")]
 mod gdb_server {
+    use gdbstub::arch::Arch;
+
+    pub struct MyTarget {}
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    pub struct MyReg {}
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct MyRegId {}
+
+    impl gdbstub::arch::RegId for MyRegId {
+        fn from_raw_id(id: usize) -> Option<(Self, usize)> {
+            None
+        }
+    }
+
+    impl gdbstub::arch::Registers for MyReg
+    {
+        type ProgramCounter = u32;
+
+        fn pc(&self) -> Self::ProgramCounter {
+            0
+        }
+
+        fn gdb_serialize(&self, mut write_byte: impl FnMut(Option<u8>)) {}
+        fn gdb_deserialize(&mut self, bytes: &[u8]) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    impl gdbstub::arch::Arch for MyTarget {
+        type Usize = u32;
+        type Registers = MyReg;
+        type RegId = MyRegId;
+        type BreakpointKind = usize;
+        fn target_description_xml() -> Option<&'static str> {
+            Some(r#"<target version="1.0"><architecture>riscv</architecture></target>"#)
+        }
+    }
     use gdbstub::common::Tid;
     use gdbstub::target::ext::base::multithread::{
         GdbInterrupt, MultiThreadOps, ResumeAction, ThreadStopReason,
@@ -20,7 +59,7 @@ mod gdb_server {
         None;
 
     impl Target for XousTarget {
-        type Arch = gdbstub_arch::riscv::Riscv32;
+        type Arch = MyTarget;
         type Error = &'static str;
         fn base_ops(&mut self) -> BaseOps<Self::Arch, Self::Error> {
             BaseOps::MultiThread(self)
@@ -54,7 +93,7 @@ mod gdb_server {
         #[inline(never)]
         fn read_registers(
             &mut self,
-            _regs: &mut gdbstub_arch::riscv::reg::RiscvCoreRegs<u32>,
+            _regs: &mut MyReg,
             _tid: Tid,
         ) -> TargetResult<(), Self> {
             Ok(())
@@ -63,7 +102,7 @@ mod gdb_server {
         #[inline(never)]
         fn write_registers(
             &mut self,
-            _regs: &gdbstub_arch::riscv::reg::RiscvCoreRegs<u32>,
+            _regs: &MyReg,
             _tid: Tid,
         ) -> TargetResult<(), Self> {
             Ok(())
@@ -76,7 +115,6 @@ mod gdb_server {
             data: &mut [u8],
             _tid: Tid, // same address space for each core
         ) -> TargetResult<(), Self> {
-            data.iter_mut().for_each(|b| *b = 0x55);
             Ok(())
         }
 
