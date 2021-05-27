@@ -36,6 +36,11 @@ fn handle_panic(_arg: &PanicInfo) -> ! {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn kmain() -> ! {
+    loop {}
+}
+
 #[cfg(baremetal)]
 #[no_mangle]
 /// This function is called from baremetal startup code to initialize various kernel structures
@@ -48,10 +53,4 @@ pub extern "C" fn init(arg_offset: *const u32, init_offset: *const u32, rpt_offs
         xous_kernel::claim_interrupt(4, debug::irq, 0 as *mut usize)
             .expect("Couldn't claim debug interrupt");
     }
-}
-
-/// Common main function for baremetal and hosted environments.
-#[no_mangle]
-pub extern "C" fn kmain() {
-    loop {}
 }
