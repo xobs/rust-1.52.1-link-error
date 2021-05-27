@@ -4,11 +4,8 @@
 use riscv::register::{satp, sie, sstatus};
 use xous_kernel::PID;
 
-pub mod exception;
 pub mod irq;
-pub mod mem;
 pub mod process;
-pub mod syscall;
 
 pub use process::Thread;
 

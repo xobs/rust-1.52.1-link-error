@@ -146,8 +146,6 @@ mod gdb_server {
                             "PID {}:",
                             process.pid,
                         );
-                        process.activate().unwrap();
-                        crate::arch::mem::MemoryMapping::current().print_map();
                         println!();
                     }
                 }
