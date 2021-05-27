@@ -1,40 +1,8 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(baremetal)]
 use core::fmt::{Error, Write};
 
-#[macro_use]
-#[cfg(all(
-    not(test),
-    baremetal,
-    any(feature = "debug-print", feature = "print-panics")
-))]
-pub mod debug_print_hardware {
-    // the HW device mapping is done in main.rs/init(); the virtual address has to be in the top 4MiB as it is the only page shared among all processes
-    pub const SUPERVISOR_UART_ADDR: *mut usize = 0xffcf_0000 as *mut usize; // see https://github.com/betrusted-io/xous-core/blob/master/docs/memory.md
-
-    #[macro_export]
-    macro_rules! print
-    {
-        ($($args:tt)+) => ({
-                use core::fmt::Write;
-                let _ = write!(crate::debug::Uart {}, $($args)+);
-        });
-    }
-}
-#[cfg(all(
-    not(test),
-    baremetal,
-    any(feature = "debug-print", feature = "print-panics")
-))]
-pub use crate::debug::debug_print_hardware::SUPERVISOR_UART_ADDR;
-
-#[cfg(all(
-    not(test),
-    baremetal,
-    not(any(feature = "debug-print", feature = "print-panics"))
-))]
 #[macro_export]
 macro_rules! print {
     ($($args:tt)+) => {{
@@ -42,7 +10,6 @@ macro_rules! print {
     }};
 }
 
-#[cfg(baremetal)]
 #[macro_export]
 macro_rules! println
 {
@@ -57,34 +24,17 @@ macro_rules! println
 	});
 }
 
-#[cfg(baremetal)]
 pub struct Uart {}
-#[cfg(baremetal)]
-static mut INITIALIZED: bool = false;
 
-#[cfg(all(baremetal, feature = "wrap-print"))]
-static mut CHAR_COUNT: usize = 0;
-
-#[cfg(baremetal)]
 impl Uart {
-    #[allow(dead_code)]
-    pub fn init(self) {
-        unsafe { INITIALIZED = true };
-    }
+    pub fn putc(&self, c: u8) {}
 
-    pub fn putc(&self, c: u8) {
-        if unsafe { INITIALIZED != true } {
-            return;
-        }
-    }
-
-    #[allow(dead_code)]
     pub fn getc(&self) -> Option<u8> {
         None
     }
 }
 
-#[cfg(all(feature = "gdbserver", baremetal))]
+#[cfg(feature = "gdbserver")]
 mod gdb_server {
     use gdbstub::common::Tid;
     use gdbstub::target::ext::base::multithread::{
@@ -142,10 +92,7 @@ mod gdb_server {
 
                 for process in &system_services.processes {
                     if !process.free() {
-                        println!(
-                            "PID {}:",
-                            process.pid,
-                        );
+                        println!("PID {}:", process.pid,);
                         println!();
                     }
                 }
@@ -221,7 +168,7 @@ mod gdb_server {
     }
 }
 
-#[cfg(all(feature = "gdbserver", baremetal))]
+#[cfg(feature = "gdbserver")]
 impl gdbstub::Connection for Uart {
     type Error = ();
 
@@ -229,9 +176,6 @@ impl gdbstub::Connection for Uart {
         Err(())
     }
     fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
-        if unsafe { INITIALIZED != true } {
-            Err(())?;
-        }
         Ok(())
     }
     fn peek(&mut self) -> Result<Option<u8>, Self::Error> {
@@ -242,11 +186,6 @@ impl gdbstub::Connection for Uart {
     }
 }
 
-#[cfg(all(
-    not(test),
-    baremetal,
-    any(feature = "debug-print", feature = "print-panics")
-))]
 pub fn irq(_irq_number: usize, _arg: *mut usize) {
     let b = Uart {}
         .getc()
@@ -291,7 +230,6 @@ pub fn irq(_irq_number: usize, _arg: *mut usize) {
     }
 }
 
-#[cfg(baremetal)]
 impl Write for Uart {
     fn write_str(&mut self, s: &str) -> Result<(), Error> {
         for c in s.bytes() {
@@ -299,27 +237,4 @@ impl Write for Uart {
         }
         Ok(())
     }
-}
-
-#[cfg(feature = "debug-print")]
-#[macro_export]
-macro_rules! klog
-{
-	() => ({
-		print!(" [{}:{}]", file!(), line!())
-	});
-	($fmt:expr) => ({
-        print!(concat!(" [{}:{} ", $fmt, "]"), file!(), line!())
-	});
-	($fmt:expr, $($args:tt)+) => ({
-		print!(concat!(" [{}:{} ", $fmt, "]"), file!(), line!(), $($args)+)
-	});
-}
-
-#[cfg(not(feature = "debug-print"))]
-#[macro_export]
-macro_rules! klog {
-    ($($args:tt)+) => {{
-        ()
-    }};
 }

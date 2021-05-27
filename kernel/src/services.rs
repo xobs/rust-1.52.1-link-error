@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::arch;
-pub use crate::arch::process::Process as ArchProcess;
-pub use crate::arch::process::Thread;
 use xous_kernel::MemoryRange;
 
 use core::num::NonZeroU8;
@@ -14,13 +11,11 @@ use xous_kernel::{
     pid_from_usize, Error, MemoryAddress, Message, ProcessInit, ThreadInit, CID, PID, SID, TID,
 };
 
-pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
-
 /// A big unifying struct containing all of the system state.
 /// This is inherited from the stage 1 bootloader.
 pub struct SystemServices {
     /// A table of all processes in the system
-    pub processes: [Process; MAX_PROCESS_COUNT],
+    pub processes: [Process; 4],
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -146,9 +141,7 @@ impl Process {
     }
 
     pub fn activate(&self) -> Result<(), xous_kernel::Error> {
-        crate::arch::process::set_current_pid(self.pid);
-        let mut current_process = crate::arch::process::Process::current();
-        current_process.activate()
+        Ok(())
     }
 
     pub fn terminate(&mut self) -> Result<(), xous_kernel::Error> {
@@ -174,8 +167,8 @@ static mut SYSTEM_SERVICES: SystemServices = SystemServices {
         ppid: unsafe { PID::new_unchecked(1) },
         pid: unsafe { PID::new_unchecked(1) },
         current_thread: 0 as TID,
-        previous_thread: INITIAL_TID as TID,
-    }; MAX_PROCESS_COUNT],
+        previous_thread: 1 as TID,
+    }; 4],
 };
 
 impl core::fmt::Debug for Process {
