@@ -15,9 +15,6 @@ mod arch;
 
 mod irq;
 mod macros;
-mod services;
-
-use services::SystemServices;
 use xous_kernel::*;
 
 #[cfg(baremetal)]

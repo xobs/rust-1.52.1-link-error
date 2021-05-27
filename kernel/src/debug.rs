@@ -80,28 +80,6 @@ mod gdb_server {
             default_resume_action: ResumeAction,
             gdb_interrupt: GdbInterrupt<'_>,
         ) -> Result<ThreadStopReason<u32>, Self::Error> {
-            match default_resume_action {
-                ResumeAction::Step | ResumeAction::StepWithSignal(_) => {
-                    Err("single-stepping not supported")?
-                }
-                _ => (),
-            }
-
-            crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
-
-                for process in &system_services.processes {
-                    if !process.free() {
-                        println!("PID {}:", process.pid,);
-                        println!();
-                    }
-                }
-                system_services
-                    .get_process(current_pid)
-                    .unwrap()
-                    .activate()
-                    .unwrap();
-            });
             Ok(ThreadStopReason::GdbInterrupt)
         }
 
