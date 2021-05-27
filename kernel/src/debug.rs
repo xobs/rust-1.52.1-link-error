@@ -143,9 +143,8 @@ mod gdb_server {
                 for process in &system_services.processes {
                     if !process.free() {
                         println!(
-                            "PID {} {}:",
+                            "PID {}:",
                             process.pid,
-                            system_services.process_name(process.pid).unwrap_or("")
                         );
                         process.activate().unwrap();
                         crate::arch::mem::MemoryMapping::current().print_map();
@@ -267,75 +266,6 @@ pub fn irq(_irq_number: usize, _arg: *mut usize) {
     }
 
     match b {
-        'm' => {
-            println!("Printing memory page tables");
-            crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
-                for process in &system_services.processes {
-                    if !process.free() {
-                        println!(
-                            "PID {} {}:",
-                            process.pid,
-                            system_services.process_name(process.pid).unwrap_or("")
-                        );
-                        process.activate().unwrap();
-                        crate::arch::mem::MemoryMapping::current().print_map();
-                        println!();
-                    }
-                }
-                system_services
-                    .get_process(current_pid)
-                    .unwrap()
-                    .activate()
-                    .unwrap();
-            });
-        }
-        'p' => {
-            println!("Printing processes");
-            crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
-                for process in &system_services.processes {
-                    if !process.free() {
-                        println!(
-                            "{:?} {}:",
-                            process,
-                            system_services.process_name(process.pid).unwrap_or("")
-                        );
-                        process.activate().unwrap();
-                        crate::arch::process::Process::with_current_mut(|arch_process| {
-                            arch_process.print_all_threads()
-                        });
-                        println!();
-                    }
-                }
-                system_services
-                    .get_process(current_pid)
-                    .unwrap()
-                    .activate()
-                    .unwrap();
-            });
-        }
-        'r' => {
-            println!("RAM usage:");
-            let mut total_bytes = 0;
-            crate::services::SystemServices::with(|system_services| {
-                crate::mem::MemoryManager::with(|mm| {
-                    for process in &system_services.processes {
-                        if !process.free() {
-                            let bytes_used = mm.ram_used_by(process.pid);
-                            total_bytes += bytes_used;
-                            println!(
-                                "    PID {:>3}: {:>4} k {}",
-                                process.pid,
-                                bytes_used / 1024,
-                                system_services.process_name(process.pid).unwrap_or("")
-                            );
-                        }
-                    }
-                });
-            });
-            println!("{} k total", total_bytes / 1024);
-        }
         #[cfg(feature = "gdbserver")]
         'g' => {
             use gdb_server::{XousTarget, GDB_BUFFER, GDB_SERVER};
@@ -360,9 +290,6 @@ pub fn irq(_irq_number: usize, _arg: *mut usize) {
             println!("--- + -----------------------");
             #[cfg(feature = "gdbserver")]
             println!(" g  | enter the gdb server");
-            println!(" m  | print MMU page tables of all processes");
-            println!(" p  | print all processes and threads");
-            println!(" r  | report RAM usage of all processes");
         }
         _ => {}
     }
