@@ -335,15 +335,6 @@ impl Process {
         let init_sp = (thread_init.stack.as_ptr() as usize) & !0xfff;
         if init_sp != 0 {
             let stack_size = thread_init.stack.len();
-            crate::mem::MemoryManager::with_mut(|memory_manager| {
-                memory_manager
-                    .reserve_range(
-                        init_sp as *mut u8,
-                        stack_size + 4096,
-                        xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W,
-                    )
-                    .expect("couldn't reserve stack")
-            });
         }
         Ok(())
     }

@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::mem::MemoryManager;
 use core::fmt;
 use riscv::register::satp;
 use xous_kernel::{MemoryFlags, PID};
@@ -105,15 +104,6 @@ impl MemoryMapping {
     }
 
     pub fn print_map(&self) {}
-
-    pub fn reserve_address(
-        &mut self,
-        mm: &mut MemoryManager,
-        addr: usize,
-        flags: MemoryFlags,
-    ) -> Result<(), xous_kernel::Error> {
-        Ok(())
-    }
 }
 
 pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
@@ -146,23 +136,6 @@ pub fn hand_page_to_user(virt: *mut u8) -> Result<(), xous_kernel::Error> {
     Ok(())
 }
 
-/// Map the given page to the specified process table.  If necessary,
-/// allocate a new page.
-///
-/// # Errors
-///
-/// * OutOfMemory - Tried to allocate a new pagetable, but ran out of memory.
-pub fn map_page_inner(
-    mm: &mut MemoryManager,
-    pid: PID,
-    phys: usize,
-    virt: usize,
-    req_flags: MemoryFlags,
-    map_user: bool,
-) -> Result<(), xous_kernel::Error> {
-    Ok(())
-}
-
 /// Get the pagetable entry for a given address, or `Err()` if the address is invalid
 pub fn pagetable_entry(addr: usize) -> Result<&'static mut usize, xous_kernel::Error> {
     if addr & 3 != 0 {
@@ -183,74 +156,10 @@ pub fn pagetable_entry(addr: usize) -> Result<&'static mut usize, xous_kernel::E
     Ok(entry)
 }
 
-/// Ummap the given page from the specified process table.  Never allocate a new
-/// page.
-///
-/// # Returns
-///
-/// The physical address for the page that was just unmapped
-///
-/// # Errors
-///
-/// * BadAddress - Address was not already mapped.
-pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, xous_kernel::Error> {
-    Ok(4)
-}
-
-/// Move a page from one address space to another.
-pub fn move_page_inner(
-    mm: &mut MemoryManager,
-    src_space: &MemoryMapping,
-    src_addr: *mut u8,
-    dest_pid: PID,
-    dest_space: &MemoryMapping,
-    dest_addr: *mut u8,
-) -> Result<(), xous_kernel::Error> {
-    Ok(())
-}
 
 /// Determine if a page has been lent.
 pub fn page_is_lent(src_addr: *mut u8) -> bool {
     false
-}
-
-/// Mark the given virtual address as being lent.  If `writable`, clear the
-/// `valid` bit so that this process can't accidentally write to this page while
-/// it is lent.
-///
-/// This uses the `RWS` fields to keep track of the following pieces of information:
-///
-/// * **PTE[8]**: This is set to `1` indicating the page is lent
-/// * **PTE[9]**: This is `1` if the page was previously writable
-///
-/// # Returns
-///
-/// # Errors
-///
-/// * **BadAlignment**: The page isn't 4096-bytes aligned
-/// * **BadAddress**: The page isn't allocated
-pub fn lend_page_inner(
-    mm: &mut MemoryManager,
-    src_space: &MemoryMapping,
-    src_addr: *mut u8,
-    dest_pid: PID,
-    dest_space: &MemoryMapping,
-    dest_addr: *mut u8,
-    mutable: bool,
-) -> Result<usize, xous_kernel::Error> {
-    Ok(4)
-}
-
-/// Return a page from `src_space` back to `dest_space`.
-pub fn return_page_inner(
-    _mm: &mut MemoryManager,
-    src_space: &MemoryMapping,
-    src_addr: *mut u8,
-    _dest_pid: PID,
-    dest_space: &MemoryMapping,
-    dest_addr: *mut u8,
-) -> Result<usize, xous_kernel::Error> {
-    Ok(4)
 }
 
 pub fn virt_to_phys(virt: usize) -> Result<usize, xous_kernel::Error> {

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::arch;
-use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
 pub use crate::arch::process::Thread;
 use xous_kernel::MemoryRange;
@@ -10,13 +9,10 @@ use xous_kernel::MemoryRange;
 use core::num::NonZeroU8;
 
 use crate::filled_array;
-use crate::server::Server;
 // use core::mem;
 use xous_kernel::{
     pid_from_usize, Error, MemoryAddress, Message, ProcessInit, ThreadInit, CID, PID, SID, TID,
 };
-
-const MAX_SERVER_COUNT: usize = 128;
 
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 
@@ -25,9 +21,6 @@ pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 pub struct SystemServices {
     /// A table of all processes in the system
     pub processes: [Process; MAX_PROCESS_COUNT],
-
-    /// A table of all servers in the system
-    servers: [Option<Server>; MAX_SERVER_COUNT],
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -84,11 +77,6 @@ impl Default for ProcessState {
 
 #[derive(Copy, Clone, PartialEq)]
 pub struct Process {
-    /// The absolute MMU address.  If 0, then this process is free.  This needs
-    /// to be available so we can switch to this process at any time, so it
-    /// cannot go into the "inner" struct.
-    pub mapping: MemoryMapping,
-
     /// Where this process is in terms of lifecycle
     state: ProcessState,
 
@@ -190,7 +178,6 @@ impl Process {
 
     pub fn activate(&self) -> Result<(), xous_kernel::Error> {
         crate::arch::process::set_current_pid(self.pid);
-        self.mapping.activate()?;
         let mut current_process = crate::arch::process::Process::current();
         current_process.activate()
     }
@@ -206,13 +193,9 @@ std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> =
         state: ProcessState::Free,
         ppid: unsafe { PID::new_unchecked(1) },
         pid: unsafe { PID::new_unchecked(1) },
-        mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
         current_thread: 0 as TID,
         previous_thread: INITIAL_TID as TID,
     }; MAX_PROCESS_COUNT],
-    // Note we can't use MAX_SERVER_COUNT here because of how Rust's
-    // macro tokenization works
-    servers: filled_array![None; 128],
 }));
 
 #[cfg(baremetal)]
@@ -221,23 +204,18 @@ static mut SYSTEM_SERVICES: SystemServices = SystemServices {
         state: ProcessState::Free,
         ppid: unsafe { PID::new_unchecked(1) },
         pid: unsafe { PID::new_unchecked(1) },
-        mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
         current_thread: 0 as TID,
         previous_thread: INITIAL_TID as TID,
     }; MAX_PROCESS_COUNT],
-    // Note we can't use MAX_SERVER_COUNT here because of how Rust's
-    // macro tokenization works
-    servers: filled_array![None; 128],
 };
 
 impl core::fmt::Debug for Process {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
         write!(
             fmt,
-            "Process {} state: {:?}  Memory mapping: {:?}",
+            "Process {} state: {:?}",
             self.pid.get(),
             self.state,
-            self.mapping
         )
     }
 }
@@ -269,68 +247,6 @@ impl SystemServices {
         SYSTEM_SERVICES.with(|ss| f(&mut ss.borrow_mut()))
     }
 
-    /// Create a new "System Services" object based on the arguments from the
-    /// kernel. These arguments decide where the memory spaces are located, as
-    /// well as where the stack and program counter should initially go.
-    #[cfg(baremetal)]
-    pub fn init_from_memory(&mut self, base: *const u32, args: &crate::args::KernelArguments) {
-        // Look through the kernel arguments and create a new process for each.
-        let init_offsets = {
-            let mut init_count = 1;
-            for arg in args.iter() {
-                if arg.name == make_type!("IniE") {
-                    init_count += 1;
-                }
-            }
-            unsafe {
-                core::slice::from_raw_parts(
-                    base as *const crate::arch::process::InitialProcess,
-                    init_count,
-                )
-            }
-        };
-
-        // Copy over the initial process list.  The pid is encoded in the SATP
-        // value from the bootloader.  For each process, translate it from a raw
-        // KernelArguments value to a SystemServices Process value.
-        for init in init_offsets.iter() {
-            let pid = (init.satp >> 22) & ((1 << 9) - 1);
-            let ref mut process = self.processes[(pid - 1) as usize];
-            // println!(
-            //     "Process: SATP: {:08x}  PID: {}  Memory: {:08x}  PC: {:08x}  SP: {:08x}  Index: {}",
-            //     init.satp,
-            //     pid,
-            //     init.satp << 10,
-            //     init.entrypoint,
-            //     init.sp,
-            //     pid - 1
-            // );
-            unsafe {
-                process.mapping.from_raw(init.satp);
-                process.ppid = PID::new_unchecked(1);
-                process.pid = PID::new(pid as _).unwrap();
-            };
-            if pid == 1 {
-                process.state = ProcessState::Running(0);
-            } else {
-                process.state = ProcessState::Setup(ThreadInit::new(
-                    unsafe { core::mem::transmute::<usize, _>(init.entrypoint) },
-                    MemoryRange::new(init.sp, crate::arch::process::DEFAULT_STACK_SIZE).unwrap(),
-                    pid,
-                    0,
-                    0,
-                    0,
-                ));
-            }
-        }
-
-        // Set up our handle with a bogus sp and pc.  These will get updated
-        // once a context switch _away_ from the kernel occurs, however we need
-        // to make sure other fields such as "thread number" are all valid.
-        ArchProcess::setup_process(PID::new(1).unwrap(), ThreadInit::default())
-            .expect("couldn't setup process");
-    }
-
     /// Add a new entry to the process table. This results in a new address space
     /// and a new PID, though the process is in the state `Setup()`.
     pub fn create_process(&mut self, init_process: ProcessInit) -> Result<PID, xous_kernel::Error> {
@@ -353,14 +269,6 @@ impl SystemServices {
     pub fn get_process(&self, pid: PID) -> Result<&Process, xous_kernel::Error> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
-        if cfg!(baremetal) && self.processes[pid_idx].mapping.get_pid() != pid {
-            println!(
-                "Process doesn't match ({} vs {})",
-                self.processes[pid_idx].mapping.get_pid(),
-                pid
-            );
-            return Err(xous_kernel::Error::ProcessNotFound);
-        }
         Ok(&self.processes[pid_idx])
     }
 
@@ -368,14 +276,6 @@ impl SystemServices {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
 
-        // if self.processes[pid_idx].mapping.get_pid() != pid {
-        //     println!(
-        //         "Process doesn't match ({} vs {})",
-        //         self.processes[pid_idx].mapping.get_pid(),
-        //         pid
-        //     );
-        //     return Err(xous_kernel::Error::ProcessNotFound);
-        // }
         Ok(&mut self.processes[pid_idx])
     }
 
@@ -385,19 +285,6 @@ impl SystemServices {
 
     pub fn current_pid(&self) -> PID {
         arch::process::current_pid()
-        // PID0 doesn't exist -- process IDs are offset by 1.
-        // assert_eq!(
-        //     self.processes[pid as usize - 1].mapping,
-        //     MemoryMapping::current(),
-        //     "process memory map doesn't match -- current_pid: {}",
-        //     pid
-        // );
-        // assert_eq!(
-        //     pid, self.pid,
-        //     "current pid {} doesn't match arch pid: {}",
-        //     self.pid, pid
-        // );
-        // pid
     }
 
     /// Create a stack frame in the specified process and jump to it.
@@ -441,7 +328,6 @@ impl SystemServices {
             };
             process.state = ProcessState::Running(available_contexts);
             // process.current_thread = tid as u8;
-            process.mapping.activate()?;
             process.activate()?;
 
             // Activate the current context
@@ -510,7 +396,6 @@ impl SystemServices {
             process.state = ProcessState::Running(available_threads);
             process.previous_thread = process.current_thread;
             process.current_thread = arch::process::IRQ_TID;
-            process.mapping.activate()?;
             process.activate()?;
         }
 
@@ -860,10 +745,6 @@ impl SystemServices {
                 }
             }
 
-            // Perform the actual switch to the new memory space.  From this
-            // point onward, we will need to activate the previous memory space
-            // if we encounter an error.
-            new.mapping.activate()?;
 
             // Set up the new process, if necessary.  Remove the new thread from
             // the list of ready threads.
@@ -994,367 +875,6 @@ impl SystemServices {
         Ok(new_tid)
     }
 
-    /// Move memory from one process to another.
-    ///
-    /// During this process, memory is deallocated from the first process, then
-    /// we switch contexts and look for a free slot in the second process. After
-    /// that, we switch back to the first process and return.
-    ///
-    /// If no free slot can be found, memory is re-attached to the first
-    /// process.  By following this break-then-make approach, we avoid getting
-    /// into a situation where memory may appear in two different processes at
-    /// once.
-    ///
-    /// The given memory range is guaranteed to be unavailable in the src process
-    /// after this function returns.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already
-    ///   shared
-    /// * **BadAddress**: The provided address was not valid
-    /// * **BadAlignment**: The provided address or length was not page-aligned
-    ///
-    /// # Panics
-    ///
-    /// If the memory should have been able to go into the destination process
-    /// but failed, then the system panics.
-    #[cfg(baremetal)]
-    pub fn send_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_virt: *mut usize,
-        len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        if len == 0 {
-            return Err(xous_kernel::Error::BadAddress);
-        }
-        if len & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
-        }
-        if src_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
-        }
-
-        let current_pid = self.current_pid();
-
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = crate::mem::PAGE_SIZE / core::mem::size_of::<usize>();
-
-        // If the dest and src PID is the same, do nothing.
-        if current_pid == dest_pid {
-            crate::mem::MemoryManager::with_mut(|mm| {
-                for offset in (0..usize_len).step_by(usize_page) {
-                    mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                }
-                Ok(())
-            })?;
-            return Ok(src_virt);
-        }
-
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        crate::mem::MemoryManager::with_mut(|mm| {
-            // Locate an address to fit the new memory.
-            dest_mapping.activate()?;
-            let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, xous_kernel::MemoryType::Messages)
-                .or_else(|e| {
-                    src_mapping.activate().expect("couldn't undo mapping");
-                    Err(e)
-                })? as *mut usize;
-            src_mapping
-                .activate()
-                .expect("Couldn't switch back to source mapping");
-
-            let mut error = None;
-
-            // Move each subsequent page.
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                mm.move_page(
-                    current_pid,
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                )
-                .unwrap_or_else(|e| error = Some(e));
-            }
-            error.map_or_else(|| Ok(dest_virt), |e| panic!("unable to send: {:?}", e))
-        })
-        .map(|val| val as *mut usize)
-    }
-
-    #[cfg(not(baremetal))]
-    pub fn send_memory(
-        &mut self,
-        src_virt: *mut usize,
-        _dest_pid: PID,
-        _dest_virt: *mut usize,
-        _len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        Ok(src_virt)
-    }
-
-    /// Lend memory from one process to another.
-    ///
-    /// During this process, memory is marked as `Shared` in the source process.
-    /// If the share is Mutable, then this memory is unmapped from the source
-    /// process.  If the share is immutable, then memory is marked as
-    /// not-writable in the source process.
-    ///
-    /// If no free slot can be found, memory is re-attached to the first
-    /// process.  By following this break-then-make approach, we avoid getting
-    /// into a situation where memory may appear in two different processes at
-    /// once.
-    ///
-    /// If the share is mutable and the memory is already shared, then an error
-    /// is returned.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already
-    ///   shared
-    /// * **BadAddress**: The provided address was not valid
-    /// * **BadAlignment**: The provided address or length was not page-aligned
-    #[cfg(baremetal)]
-    pub fn lend_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_virt: *mut usize,
-        len: usize,
-        mutable: bool,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        if len == 0 {
-            return Err(xous_kernel::Error::BadAddress);
-        }
-        if len & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
-        }
-        if src_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
-        }
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = crate::mem::PAGE_SIZE / core::mem::size_of::<usize>();
-
-        let current_pid = self.current_pid();
-        // If it's within the same process, ignore the move operation and
-        // just ensure the pages actually exist.
-        if current_pid == dest_pid {
-            MemoryManager::with_mut(|mm| {
-                for offset in (0..usize_len).step_by(usize_page) {
-                    assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                    mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                }
-                Ok(())
-            })?;
-            return Ok(src_virt);
-        }
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        use crate::mem::MemoryManager;
-        MemoryManager::with_mut(|mm| {
-            // Locate an address to fit the new memory.
-            dest_mapping.activate()?;
-            let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, xous_kernel::MemoryType::Messages)
-                .or_else(|e| {
-                    src_mapping.activate().unwrap();
-                    // klog!("Couldn't find a virtual address");
-                    Err(e)
-                })? as *mut usize;
-            src_mapping.activate().unwrap();
-
-            let mut error = None;
-
-            // Lend each subsequent page.
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                mm.lend_page(
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                    mutable,
-                )
-                .unwrap_or_else(|e| {
-                    error = Some(e);
-                    // klog!(
-                    //     "Couldn't lend page {:08x} -> {:08x}",
-                    //     src_virt.wrapping_add(offset) as usize,
-                    //     dest_virt.wrapping_add(offset) as usize
-                    // );
-                    0
-                });
-            }
-            error.map_or_else(
-                || Ok(dest_virt),
-                |e| {
-                    panic!(
-                        "unable to lend {:08x} in pid {} to {:08x} in pid {}: {:?}",
-                        src_virt as usize, current_pid, dest_virt as usize, dest_pid, e
-                    )
-                },
-            )
-        })
-        .map(|val| val as *mut usize)
-    }
-
-    #[cfg(not(baremetal))]
-    pub fn lend_memory(
-        &mut self,
-        src_virt: *mut usize,
-        _dest_pid: PID,
-        _dest_virt: *mut usize,
-        _len: usize,
-        _mutable: bool,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        Ok(src_virt)
-    }
-
-    /// Return memory from one process back to another
-    ///
-    /// During this process, memory is unmapped from the source process.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already shared
-    #[cfg(baremetal)]
-    pub fn return_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        _dest_tid: TID,
-        dest_virt: *mut usize,
-        len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        // klog!(
-        //     "Returning from {}:{} to {}:{}",
-        //     self.current_pid(),
-        //     _src_tid,
-        //     dest_pid,
-        //     _dest_tid
-        // );
-        if len == 0 {
-            // klog!("No len");
-            Err(xous_kernel::Error::BadAddress)?;
-        }
-        if len & 0xfff != 0 {
-            // klog!("len not aligned");
-            Err(xous_kernel::Error::BadAddress)?;
-        }
-        if src_virt as usize & 0xfff != 0 {
-            // klog!("Src virt not aligned");
-            Err(xous_kernel::Error::BadAddress)?;
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            // klog!("dest virt not aligned");
-            Err(xous_kernel::Error::BadAddress)?;
-        }
-
-        // If memory is getting returned to the kernel, then it is memory that was
-        // borrowed but
-        if dest_pid.get() == 1 {}
-
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = crate::mem::PAGE_SIZE / core::mem::size_of::<usize>();
-
-        let current_pid = self.current_pid();
-        // If it's within the same process, ignore the operation.
-        if current_pid == dest_pid {
-            return Ok(src_virt);
-        }
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        use crate::mem::MemoryManager;
-        MemoryManager::with_mut(|mm| {
-            let mut error = None;
-
-            // Lend each subsequent page.
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.unlend_page(
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                )
-                .unwrap_or_else(|e| {
-                    // panic!(
-                    //     "Couldn't unlend {:08x} from {:08x}: {:?}",
-                    //     src_virt.wrapping_add(offset) as usize,
-                    //     dest_virt.wrapping_add(offset) as usize,
-                    //     e
-                    // );
-                    error = Some(e);
-                    0
-                });
-            }
-            error.map_or_else(|| Ok(dest_virt), |e| Err(e))
-        })
-        .map(|val| val as *mut usize)
-    }
-
-    #[cfg(not(baremetal))]
-    pub fn return_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_tid: TID,
-        _dest_virt: *mut usize,
-        len: usize,
-        // buf: MemoryRange,
-    ) -> Result<*mut usize, xous_kernel::Error> {
-        let buf = MemoryRange::new(src_virt as usize, len)?;
-        let buf = unsafe { core::slice::from_raw_parts(buf.as_ptr(), buf.len()) };
-        let current_pid = self.current_pid();
-        {
-            let target_process = self.get_process(dest_pid)?;
-            target_process.activate()?;
-            let mut arch_process = crate::arch::process::Process::current();
-            arch_process.return_memory(dest_tid, buf);
-        }
-        let target_process = self.get_process(current_pid)?;
-        target_process.activate()?;
-
-        Ok(src_virt as *mut usize)
-    }
-
     /// Create a new thread in the current process.  Execution begins at
     /// `entrypoint`, with the stack pointer set to `stack_pointer`.  A single
     /// argument will be passed to the new function.
@@ -1481,471 +1001,4 @@ impl SystemServices {
             Ok(xous_kernel::Result::Scalar1(0))
         }
     }
-
-    /// Allocate a new server ID for this process and return the address. If the
-    /// server table is full, or if there is not enough memory to map the server queue,
-    /// return an error.
-    ///
-    /// # Errors
-    ///
-    /// * **OutOfMemory**: A new page could not be assigned to store the server
-    ///   queue.
-    /// * **ServerNotFound**: The server queue was full and a free slot could not
-    ///   be found.
-    pub fn create_server_with_address(
-        &mut self,
-        pid: PID,
-        sid: SID,
-    ) -> Result<(SID, CID), xous_kernel::Error> {
-        // println!(
-        //     "KERNEL({}): Looking through server list for free server",
-        //     self.pid.get()
-        // );
-
-        // TODO: Come up with a way to randomize the server ID
-        let ppid = self.get_process(pid)?.ppid.get();
-        if ppid != 1 {
-            panic!(
-                "KERNEL({}): Non-PID1 processes cannot start servers yet",
-                pid.get()
-            );
-        }
-
-        for entry in self.servers.iter_mut() {
-            if entry == &None {
-                #[cfg(baremetal)]
-                // Allocate a single page for the server queue
-                let backing = crate::mem::MemoryManager::with_mut(|mm| {
-                    MemoryRange::new(
-                        mm.map_zeroed_page(pid, false)? as _,
-                        crate::arch::mem::PAGE_SIZE,
-                    )
-                })?;
-
-                #[cfg(not(baremetal))]
-                let backing = MemoryRange::new(4096, 4096).unwrap();
-                // println!(
-                //     "KERNEL({}): Found a free slot for server {:?} @ {} -- allocating an entry",
-                //     pid.get(),
-                //     sid,
-                //     _idx,
-                // );
-
-                // Initialize the server with the given memory page.
-                Server::init(entry, pid, sid, backing).map_err(|x| x)?;
-
-                let cid = self.connect_to_server(sid)?;
-                return Ok((sid, cid));
-            }
-        }
-        Err(xous_kernel::Error::ServerNotFound)
-    }
-
-    /// Generate a new server ID for this process and then create a new server.
-    /// If the
-    /// server table is full, or if there is not enough memory to map the server queue,
-    /// return an error.
-    ///
-    /// # Errors
-    ///
-    /// * **OutOfMemory**: A new page could not be assigned to store the server
-    ///   queue.
-    /// * **ServerNotFound**: The server queue was full and a free slot could not
-    ///   be found.
-    pub fn create_server(&mut self, pid: PID) -> Result<(SID, CID), xous_kernel::Error> {
-        let sid = SID::from_u32(0,0,0,0);
-        self.create_server_with_address(pid, sid)
-    }
-
-    /// Generate a random server ID and return it to the caller. Doesn't create
-    /// any processes.
-    pub fn create_server_id(&mut self) -> Result<SID, xous_kernel::Error> {
-        let sid = SID::from_u32(0,0,0,0);
-        Ok(sid)
-    }
-
-    /// Destroy the provided server ID and disconnect any processes that are
-    /// connected.
-    pub fn destroy_server(&mut self, pid: PID, sid: SID) -> Result<(), xous_kernel::Error> {
-        let mut idx_to_destroy = None;
-        // Look through the server list for a server that matches this SID
-        for (idx, entry) in self.servers.iter().enumerate() {
-            if let Some(server) = entry {
-                if server.sid == sid && server.pid == pid {
-                    idx_to_destroy = Some(idx);
-                    break;
-                }
-            }
-        }
-
-        let server_idx = idx_to_destroy.ok_or(xous_kernel::Error::ServerNotFound)?;
-        let server = self.servers[server_idx].take().unwrap();
-        // Try to destroy the server. This will fail if the server
-        // has any outstanding memory requests.
-        server.destroy(self).map_err(|server| {
-            self.servers[server_idx] = Some(server);
-            xous_kernel::Error::ServerQueueFull
-        })?;
-
-        let pid = crate::arch::process::current_pid();
-        // println!("KERNEL({}): Server table: {:?}", _pid.get(), self.servers);
-        // Disconnect this server from all processes.
-        for process in self.processes.iter_mut() {
-            if !process.free() {
-                process.activate().unwrap();
-                ArchProcess::with_inner_mut(|process_inner| {
-                    // Look through the connection map for (1) a free slot, and (2) an
-                    // existing connection
-                    for server_idx_opt in process_inner.connection_map.iter_mut() {
-                        if let Some(client_server_idx) = server_idx_opt {
-                            if client_server_idx.get() == (server_idx + 2) as _ {
-                                *server_idx_opt = None;
-                                continue;
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // Switch back to the primary process.
-        self.get_process(pid).unwrap().activate().unwrap();
-        Ok(())
-    }
-
-    /// Connect to a server on behalf of another process.
-    pub fn connect_process_to_server(
-        &mut self,
-        target_pid: PID,
-        sid: SID,
-    ) -> Result<CID, xous_kernel::Error> {
-        let original_pid = crate::arch::process::current_pid();
-
-        let process = self.get_process_mut(target_pid)?;
-        process.activate()?;
-
-        let result = self.connect_to_server(sid);
-
-        let process = self.get_process_mut(original_pid)?;
-        process.activate().unwrap();
-
-        result
-    }
-    /// Allocate a new server ID for this process and return the address. If the
-    /// server table is full, return an error.
-    pub fn connect_to_server(&mut self, sid: SID) -> Result<CID, xous_kernel::Error> {
-        // Check to see if we've already connected to this server.
-        // While doing this, find a free slot in case we haven't
-        // yet connected.
-
-        let pid = crate::arch::process::current_pid();
-        ArchProcess::with_inner_mut(|process_inner| {
-            assert_eq!(pid, process_inner.pid);
-            let mut slot_idx = None;
-            // Look through the connection map for (1) a free slot, and (2) an
-            // existing connection
-            for (connection_idx, server_idx) in process_inner.connection_map.iter().enumerate() {
-                // If we find an empty slot, use it
-                if server_idx.is_none() {
-                    if slot_idx.is_none() {
-                        slot_idx = Some(connection_idx);
-                    }
-                    continue;
-                }
-
-                // If a connection to this server ID exists already, return it.
-                let server_idx = (server_idx.unwrap().get() as usize) - 2;
-                if let Some(allocated_server) = &self.servers[server_idx] {
-                    if allocated_server.sid == sid {
-                        // println!("KERNEL({}): Existing connection to SID {:?} found in this process @ {}, process connection map is: {:?}",
-                        //     _pid.get(),
-                        //     sid,
-                        //     (connection_idx as CID) + 2,
-                        //     process_inner.connection_map,
-                        // );
-                        return Ok((connection_idx as CID) + 2);
-                    }
-                }
-            }
-            let slot_idx = slot_idx.ok_or_else(|| Error::OutOfMemory)?;
-
-            // Look through all servers for one whose SID matches.
-            for (server_idx, server) in self.servers.iter().enumerate() {
-                if let Some(allocated_server) = server {
-                    if allocated_server.sid == sid {
-                        process_inner.connection_map[slot_idx] =
-                            Some(NonZeroU8::new((server_idx as u8) + 2).unwrap());
-                        // println!(
-                        //     "KERNEL({}): New connection to {:?}. After connection, cid is {} and process connection map is: {:?}",
-                        //     pid.get(),
-                        //     sid,
-                        //     slot_idx + 2,
-                        //     process_inner.connection_map
-                        // );
-                        return Ok((slot_idx as CID) + 2);
-                    }
-                }
-            }
-            Err(xous_kernel::Error::ServerNotFound) // May also be OutOfMemory if the table is full
-        })
-    }
-
-    /// Invalidate the provided connection ID.
-    pub fn disconnect_from_server(&mut self, cid: CID) -> Result<(), xous_kernel::Error> {
-        // Check to see if we've already connected to this server.
-        // While doing this, find a free slot in case we haven't
-        // yet connected.
-
-        // Slot indices are offset by two. Ensure we don't underflow.
-        let slot_idx = cid;
-        if slot_idx < 2 {
-            klog!("CID {} is not valid", cid);
-            return Err(xous_kernel::Error::ServerNotFound);
-        }
-        let slot_idx = (slot_idx - 2) as usize;
-        let pid = crate::arch::process::current_pid();
-        // klog!("KERNEL({}): Server table: {:?}", pid.get(), self.servers);
-        ArchProcess::with_inner_mut(|process_inner| {
-            assert_eq!(pid, process_inner.pid);
-            if slot_idx >= process_inner.connection_map.len() {
-                klog!("Slot index exceeds map length");
-                return Err(xous_kernel::Error::ServerNotFound);
-            }
-
-            // If the server ID is None, then we weren't connected in the first place.
-            let idx = &mut process_inner.connection_map[slot_idx];
-            if idx.is_none() {
-                klog!("IDX[{}] is already None!", slot_idx);
-                return Err(xous_kernel::Error::ServerNotFound);
-            }
-
-            // Nullify this connection ID. It may now be reused.
-            *idx = None;
-            klog!("Removing server from table");
-            Ok(())
-        })
-    }
-
-    /// Retrieve the server ID index from the specified SID.
-    /// This may only be called if the SID is a server owned by
-    /// the current process.
-    pub fn sidx_from_sid(&mut self, sid: SID, pid: PID) -> Option<usize> {
-        // println!("KERNEL({}): Server table: {:?}", pid.get(), self.servers);
-        for (idx, slot) in self.servers.iter().enumerate() {
-            if let Some(server) = slot {
-                if server.pid == pid && server.sid == sid {
-                    return Some(idx);
-                }
-            }
-        }
-        None
-    }
-
-    /// Return a server based on the connection id and the current process
-    pub fn server_from_sidx(&self, sidx: usize) -> Option<&Server> {
-        if sidx > self.servers.len() {
-            None
-        } else {
-            self.servers[sidx].as_ref()
-        }
-    }
-
-    /// Return a server based on the connection id and the current process
-    pub fn server_from_sidx_mut(&mut self, sidx: usize) -> Option<&mut Server> {
-        if sidx > self.servers.len() {
-            None
-        } else {
-            self.servers[sidx].as_mut()
-        }
-    }
-
-    /// Retrieve a Server ID (Extended) value from the given Connection ID
-    /// within the current process.
-    pub fn sidx_from_cid(&self, cid: CID) -> Option<usize> {
-        // println!("KERNEL({}): Attempting to get SIDX from CID {}", crate::arch::process::current_pid(), cid);
-        if cid == 0 {
-            // println!("KERNEL({}): CID is invalid -- returning", crate::arch::process::current_pid());
-            return None;
-        } else if cid == 1 {
-            // println!("KERNEL({}): Server has terminated -- returning", crate::arch::process::current_pid());
-            return None;
-        }
-
-        let cid = cid - 2;
-
-        ArchProcess::with_inner(|process_inner| {
-            assert_eq!(crate::arch::process::current_pid(), process_inner.pid);
-            if (cid as usize) >= process_inner.connection_map.len() {
-                // println!("KERNEL({}): CID {} > connection map len", crate::arch::process::current_pid(), cid);
-                return None;
-            }
-            // if process_inner.connection_map[cid].is_none() {
-            //     println!("KERNEL({}): CID {} doesn't exist in the connection map", crate::arch::process::current_pid(), cid + 2);
-            //     println!("KERNEL({}): Process inner is: {:?}", crate::arch::process::current_pid(), process_inner);
-            // }
-            let mut server_idx = process_inner.connection_map[cid as usize]?.get() as usize;
-            if server_idx == 1 {
-                // println!("KERNEL({}): CID {} is no longer valid", crate::arch::process::current_pid(), cid + 2);
-                return None;
-            }
-            server_idx -= 2;
-            if server_idx >= self.servers.len() {
-                // println!("KERNEL({}): CID {} and server_idx >= {}", crate::arch::process::current_pid(), cid + 2, server_idx);
-                None
-            } else {
-                // println!("KERNEL({}): SIDX for CID {} found at index {}", crate::arch::process::current_pid(), cid + 2, server_idx);
-                Some(server_idx)
-            }
-        })
-    }
-
-    /// Switch to the server's memory space and add the message to its server
-    /// queue
-    pub fn queue_server_message(
-        &mut self,
-        sidx: usize,
-        pid: PID,
-        context: TID,
-        message: Message,
-        original_address: Option<MemoryAddress>,
-    ) -> Result<usize, xous_kernel::Error> {
-        let current_pid = self.current_pid();
-        let result = {
-            let server_pid = self
-                .server_from_sidx(sidx)
-                .ok_or(xous_kernel::Error::ServerNotFound)?
-                .pid;
-            {
-                let server_process = self.get_process(server_pid)?;
-                server_process.mapping.activate().unwrap();
-            }
-            let server = self
-                .server_from_sidx_mut(sidx)
-                .expect("couldn't re-discover server index");
-            server.queue_message(pid, context, message, original_address)
-        };
-        let current_process = self
-            .get_process(current_pid)
-            .expect("couldn't restore previous process");
-        current_process.mapping.activate()?;
-        result
-    }
-
-    /// Switch to the server's address space and add a "remember this address"
-    /// entry to its server queue, then switch back to the original address space.
-    pub fn remember_server_message(
-        &mut self,
-        sidx: usize,
-        current_pid: PID,
-        current_thread: TID,
-        message: &Message,
-        client_address: Option<MemoryAddress>,
-    ) -> Result<usize, xous_kernel::Error> {
-        let server_pid = self
-            .server_from_sidx(sidx)
-            .ok_or(xous_kernel::Error::ServerNotFound)?
-            .pid;
-        {
-            let server_process = self.get_process(server_pid)?;
-            server_process.mapping.activate()?;
-        }
-        let server = self
-            .server_from_sidx_mut(sidx)
-            .expect("couldn't re-discover server index");
-        let result = server.queue_response(current_pid, current_thread, message, client_address);
-        let current_process = self
-            .get_process(current_pid)
-            .expect("couldn't find old process");
-        current_process
-            .mapping
-            .activate()
-            .expect("couldn't switch back to previous address space");
-        result
-    }
-
-    // /// Get a server index based on a SID
-    // pub fn server_sidx(&mut self, sid: SID) -> Option<usize> {
-    //     for (idx, server) in self.servers.iter_mut().enumerate() {
-    //         if let Some(active_server) = server {
-    //             if active_server.sid == sid {
-    //                 return Some(idx);
-    //             }
-    //         }
-    //     }
-    //     None
-    // }
-
-    /// Terminate the given process. Returns the process' parent PID.
-    pub fn terminate_process(&mut self, target_pid: PID) -> Result<PID, xous_kernel::Error> {
-        // To terminate a process, we must perform the following:
-        //
-        // 1. If we have any client connections, remove them.
-        // 2. If there are any clients connected to our server, insert a tombstone so writes fail
-        // 3. If there are any incoming server requests queued, dequeue them and return an error
-        // 4. Mark all "Borrowed" memory as "Free-when-returned". That way, if we've shared
-        //    memory to a Server, it will be reclaimed by the system when it comes back
-
-        // 1. Find all servers associated with this PID and remove them.
-        for (idx, server) in self.servers.iter_mut().enumerate() {
-            if let Some(server) = server {
-                if server.pid == target_pid {
-                    // This is our server, so look through the connection map of each
-                    // process to determine if this connection needs to be replaced
-                    // with a tombstone.
-                    for process in self.processes.iter() {
-                        if process.free() {
-                            continue;
-                        }
-                        process.activate()?;
-                        ArchProcess::with_inner_mut(|process_inner| {
-                            // Look through the connection map for a connection
-                            // that matches this index. Note that connection map entries
-                            // are offset by two, because 0 == free and 1 == "tombstone".
-                            for mapping in process_inner.connection_map.iter_mut() {
-                                if let Some(mapping) = mapping {
-                                    if mapping.get() == (idx as u8) + 2 {
-                                        *mapping = NonZeroU8::new(1).unwrap();
-                                    }
-                                }
-                            }
-                        })
-                    }
-                }
-
-                let process = self.processes[(server.pid.get() - 1) as usize];
-                process.activate().unwrap();
-                // Look through this server's memory space to determine if this process
-                // is mentioned there as having some memory lent out.
-                server.discard_messages_for_pid(target_pid);
-            }
-        }
-        let process = self.get_process_mut(target_pid)?;
-        process.activate()?;
-        let parent_pid = process.ppid;
-        process.terminate()?;
-
-        self.switch_to_thread(parent_pid, None).unwrap();
-
-        Ok(parent_pid)
-    }
-
-    /// Calls the provided function with the current inner process state.
-    pub fn shutdown(&mut self) -> Result<(), xous_kernel::Error> {
-        // Destroy all servers. This will cause all queued messages to be lost.
-        for server_idx in 0..self.servers.len() {
-            if let Some(server) = self.servers[server_idx].take() {
-                server.destroy(self).unwrap();
-            }
-        }
-
-        // Destroy all processes. This will cause them to immediately terminate.
-        for process in &mut self.processes {
-            if !process.free() {
-                process.activate().unwrap();
-                process.terminate().unwrap();
-            }
-        }
-        Ok(())
-    }
-
 }

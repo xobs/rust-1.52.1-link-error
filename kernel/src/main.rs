@@ -13,14 +13,9 @@ mod debug;
 
 mod arch;
 
-#[macro_use]
-mod args;
 mod irq;
 mod macros;
-mod mem;
-mod server;
 mod services;
-mod syscall;
 
 use services::SystemServices;
 use xous_kernel::*;
