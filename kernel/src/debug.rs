@@ -1,38 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::fmt::{Error, Write};
-
-#[macro_export]
-macro_rules! print {
-    ($($args:tt)+) => {{
-        ()
-    }};
-}
-
-#[macro_export]
-macro_rules! println
-{
-	() => ({
-		print!("\r\n")
-	});
-	($fmt:expr) => ({
-		print!(concat!($fmt, "\r\n"))
-	});
-	($fmt:expr, $($args:tt)+) => ({
-		print!(concat!($fmt, "\r\n"), $($args)+)
-	});
-}
-
 pub struct Uart {}
-
-impl Uart {
-    pub fn putc(&self, c: u8) {}
-
-    pub fn getc(&self) -> Option<u8> {
-        None
-    }
-}
 
 #[cfg(feature = "gdbserver")]
 mod gdb_server {
@@ -45,25 +14,10 @@ mod gdb_server {
     use gdbstub::target::{Target, TargetResult};
     use gdbstub::GdbStubStateMachine;
 
-    pub struct XousTarget {
-        pid: Option<xous_kernel::PID>,
-        tid: Option<xous_kernel::TID>,
-        thread_mask: usize,
-    }
+    pub struct XousTarget {}
 
     pub static mut GDB_SERVER: Option<(GdbStubStateMachine<XousTarget, super::Uart>, XousTarget)> =
         None;
-    pub static mut GDB_BUFFER: [u8; 4096] = [0u8; 4096];
-
-    impl XousTarget {
-        pub fn new() -> XousTarget {
-            XousTarget {
-                pid: None,
-                tid: None,
-                thread_mask: 0,
-            }
-        }
-    }
 
     impl Target for XousTarget {
         type Arch = gdbstub_arch::riscv::Riscv32;
@@ -165,9 +119,7 @@ impl gdbstub::Connection for Uart {
 }
 
 pub fn irq(_irq_number: usize, _arg: *mut usize) {
-    let b = Uart {}
-        .getc()
-        .expect("no character queued despite interrupt") as char;
+    let b = b'4' as char;
 
     #[cfg(feature = "gdbserver")]
     unsafe {
@@ -176,43 +128,5 @@ pub fn irq(_irq_number: usize, _arg: *mut usize) {
             gdb.pump(target, b as u8).unwrap();
             return;
         }
-    }
-
-    match b {
-        #[cfg(feature = "gdbserver")]
-        'g' => {
-            use gdb_server::{XousTarget, GDB_BUFFER, GDB_SERVER};
-            println!("Starting GDB server -- attach your debugger now");
-            let xous_target = XousTarget::new();
-            match gdbstub::GdbStubBuilder::new(Uart {})
-                .with_packet_buffer(unsafe { &mut GDB_BUFFER })
-                .build()
-            {
-                Ok(gdb) => match gdb.run_state_machine() {
-                    Ok(gdb_state_machine) => unsafe {
-                        GDB_SERVER = Some((gdb_state_machine, xous_target))
-                    },
-                    Err(e) => println!("Unable to start GDB state machine: {}", e),
-                },
-                Err(e) => println!("Unable to start GDB server: {}", e),
-            }
-        }
-        'h' => {
-            println!("Xous Kernel Debug");
-            println!("key | command");
-            println!("--- + -----------------------");
-            #[cfg(feature = "gdbserver")]
-            println!(" g  | enter the gdb server");
-        }
-        _ => {}
-    }
-}
-
-impl Write for Uart {
-    fn write_str(&mut self, s: &str) -> Result<(), Error> {
-        for c in s.bytes() {
-            self.putc(c);
-        }
-        Ok(())
     }
 }
