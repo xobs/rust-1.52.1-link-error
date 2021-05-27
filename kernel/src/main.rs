@@ -71,10 +71,6 @@ pub extern "C" fn init(arg_offset: *const u32, init_offset: *const u32, rpt_offs
             println!("    {}", arg);
         }
     }
-
-    // rand::init() already clears the initial pipe, but pump the TRNG a little more out of no other reason than sheer paranoia
-    arch::rand::get_u32();
-    arch::rand::get_u32();
 }
 
 /// Common main function for baremetal and hosted environments.

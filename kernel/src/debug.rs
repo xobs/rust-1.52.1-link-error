@@ -218,8 +218,6 @@ mod gdb_server {
             &mut self,
             register_thread: &mut dyn FnMut(Tid),
         ) -> Result<(), Self::Error> {
-            // register_thread(Tid::new(1).unwrap());
-            // register_thread(Tid::new(2).unwrap());
             Ok(())
         }
     }

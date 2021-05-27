@@ -1568,24 +1568,14 @@ impl SystemServices {
     /// * **ServerNotFound**: The server queue was full and a free slot could not
     ///   be found.
     pub fn create_server(&mut self, pid: PID) -> Result<(SID, CID), xous_kernel::Error> {
-        let sid = SID::from_u32(
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-        );
+        let sid = SID::from_u32(0,0,0,0);
         self.create_server_with_address(pid, sid)
     }
 
     /// Generate a random server ID and return it to the caller. Doesn't create
     /// any processes.
     pub fn create_server_id(&mut self) -> Result<SID, xous_kernel::Error> {
-        let sid = SID::from_u32(
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-            arch::rand::get_u32(),
-        );
+        let sid = SID::from_u32(0,0,0,0);
         Ok(sid)
     }
 

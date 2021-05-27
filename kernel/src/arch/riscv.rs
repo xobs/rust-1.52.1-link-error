@@ -8,7 +8,6 @@ pub mod exception;
 pub mod irq;
 pub mod mem;
 pub mod process;
-pub mod rand;
 pub mod syscall;
 
 pub use process::Thread;
@@ -22,7 +21,6 @@ pub fn init() {
         sie::set_ssoft();
         sie::set_sext();
     }
-    rand::init();
 }
 
 /// Put the core to sleep until an interrupt hits. Returns `true`
